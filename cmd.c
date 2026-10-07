@@ -24,6 +24,7 @@
 #include "mach.h"
 #include "memory.h"
 #include "cmd.h"
+#include "rootimg.h"
 
 int load_script(const char *filename) {
     FILE *script = fopen(filename, "r");
@@ -69,6 +70,7 @@ int process_cmd(char *cmd) {
     DEFINE_COMMAND(phys, setget_phys);
     DEFINE_COMMAND(rdsize, setget_rdisksize);
     DEFINE_COMMAND(cmdline, kernel_cmdline);
+    DEFINE_COMMAND(rootimg, rootimg);
     DEFINE_COMMAND(boot, kernel_boot);
     DEFINE_COMMAND(probemem, force_guess_memory);
     DEFINE_COMMAND(poke, poke);

@@ -67,7 +67,7 @@ struct params {
         size_t size;
     } phys;
 
-    char kernel_cmdline[128];
+    char kernel_cmdline[256];
 
     int machine_id;
 

@@ -4,6 +4,7 @@
 #include "fdt.h"
 #include "common.h"
 #include "memory.h"
+#include "rootimg.h"
 
 static int _fdt_make_node(void *fdt, int parentoffset, const char *name) {
     int e = fdt_subnode_offset(fdt, parentoffset, name);
@@ -39,9 +40,23 @@ int update_fdt() {
     }
 
     /* If not given assume defaults from DT */
-    if(strlen(settings.kernel_cmdline) && fdt_setprop_string(fdt, chosen, "bootargs", settings.kernel_cmdline) < 0) {
-        printl("Failed to set cmdline!" NEWLINE);
-        return 1;
+    if(strlen(settings.kernel_cmdline) || *rootimg_cmdline()) {
+        char args[sizeof(settings.kernel_cmdline) + 160];
+
+        if (strlen(settings.kernel_cmdline)) {
+            strcpy(args, settings.kernel_cmdline);
+        } else {
+            /* keep the device tree's command line */
+            int len;
+            const char *dt = fdt_getprop(fdt, chosen, "bootargs", &len);
+
+            snprintf(args, sizeof(args) - 160, "%s", dt && len > 0 ? dt : "");
+        }
+        strcat(args, rootimg_cmdline());
+        if (fdt_setprop_string(fdt, chosen, "bootargs", args) < 0) {
+            printl("Failed to set cmdline!" NEWLINE);
+            return 1;
+        }
     }
 
     //UNTESTED (but doesn't hurt)
