@@ -1,7 +1,8 @@
 include libfdt/Makefile.libfdt
 GCC = nspire-gcc
 LD = nspire-ld
-GCCFLAGS = -mcpu=arm926ej-s -Os -nostdlib -Wall -Werror -marm -Ilibfdt/
+# min-pagesize=0: the exception vectors live at address 0, which is valid here
+GCCFLAGS = -mcpu=arm926ej-s -Os -nostdlib -Wall -Werror -marm -Ilibfdt/ --param=min-pagesize=0
 
 # Feel free to comment the following lines out if you're
 # not using git or you don't want the build date included
