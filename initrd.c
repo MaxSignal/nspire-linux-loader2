@@ -16,10 +16,11 @@
 */
 
 /*
- * The initrd, which may be larger than any block the OS heap gives: it is
- * loaded into as many pieces as needed, and at boot, once nothing of the OS
- * runs any more, gathered into the highest free part of the RAM, out of the
- * way of the kernel decompressing itself at the start of the RAM.
+ * The initrd goes at the end of the kernel's block when it fits there, as
+ * it always did. Otherwise, as it may be larger than any block the OS heap
+ * gives, it is loaded into as many pieces as needed, and at boot, once
+ * nothing of the OS runs any more, gathered into the highest free part of
+ * the RAM, out of the way of the kernel decompressing itself there.
  */
 
 #include <os.h>
@@ -30,6 +31,7 @@
 
 #include "common.h"
 #include "initrd.h"
+#include "memory.h"
 
 #define MAX_PIECES	128
 #define MIN_PIECE	0x10000
@@ -43,8 +45,12 @@ static struct {
     size_t size;
 } pieces[MAX_PIECES];
 static int npieces;
+static int in_place;            /* at the end of the kernel's block */
 
 void initrd_free(void) {
+    if (in_place)
+        npieces = 0;
+    in_place = 0;
     while (npieces)
         free(pieces[--npieces].addr);
     settings.initrd.addr = NULL;
@@ -69,6 +75,10 @@ static void *alloc_piece(size_t want, size_t *got) {
     }
 }
 
+int initrd_in_kernel_block(void) {
+    return in_place;
+}
+
 int initrd_load(const char *filename) {
     struct stat st;
     size_t left;
@@ -85,6 +95,31 @@ int initrd_load(const char *filename) {
         return -1;
     }
 
+    /* At the end of the kernel's block, when it fits */
+    if (settings.mem_block.size - settings.kernel.size >= st.st_size + PAGE_SIZE) {
+        char *end = (char *)settings.mem_block.start + settings.mem_block.size;
+        char *addr = ROUND_PAGE_BOUND(end - st.st_size);
+
+        if (fread(addr, 1, st.st_size, f) != (size_t)st.st_size) {
+            printl("Failed to read %s" NEWLINE, filename);
+            fclose(f);
+            return -1;
+        }
+        fclose(f);
+        pieces[0].addr = addr;
+        pieces[0].size = st.st_size;
+        npieces = 1;
+        in_place = 1;
+        settings.initrd.addr = addr;
+        settings.initrd.size = st.st_size;
+        settings.initrd_loaded = 1;
+        printl("Initrd successfully loaded" NEWLINE);
+        return 0;
+    }
+
+    /* Leave the rest of the kernel's block to the pieces */
+    if (settings.kernel_loaded)
+        mem_block_shrink(settings.kernel.size);
     for (left = st.st_size; left; ) {
         size_t got, n;
         void *p;
@@ -163,7 +198,7 @@ int initrd_place(void) {
     unsigned floor, dst, sp;
     int nbusy = 0, i, moved;
 
-    if (!settings.initrd_loaded)
+    if (!settings.initrd_loaded || in_place)
         return 0;
 
     /* The kernel decompresses itself at the start of the RAM */
@@ -209,6 +244,9 @@ int initrd_place(void) {
 void initrd_gather(void) {
     char *dst = settings.initrd.addr;
     int i;
+
+    if (in_place)
+        return;
 
     for (i = 0; i < npieces; i++) {
         builtin_memcpy(dst, pieces[i].addr, pieces[i].size);

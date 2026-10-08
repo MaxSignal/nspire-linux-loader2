@@ -38,6 +38,10 @@ void load_kernel(const char *filename) {
         return;
     }
 
+    if (settings.initrd_loaded && initrd_in_kernel_block()) {
+        printl("Load the kernel before the initrd" NEWLINE);
+        return;
+    }
     if (mem_block_fit(kernel_size)) {
         printl( "Kernel too large!" NEWLINE
                 "Tried to load kernel of %u bytes into %u bytes of free space" NEWLINE,
@@ -59,8 +63,6 @@ void load_kernel(const char *filename) {
         printl("Warning: read less data from file than expected" NEWLINE);
 
     fclose(f);
-    /* Leave the rest of the block to the initrd */
-    mem_block_shrink(settings.kernel.size);
     printl("Kernel successfully loaded" NEWLINE);
     return;
 }
