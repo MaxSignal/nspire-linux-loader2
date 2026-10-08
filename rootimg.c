@@ -414,14 +414,12 @@ void rootimg(char *arg) {
     }
     if (read_config(cfgpath, &cfg))
         return;
+    /* Only a new image needs the payload: it may be deleted afterwards */
     payload_path = NULL;
     if (cfg.payload[0]) {
         payload_len = file_bytes(cfg.payload);
-        if (!payload_len) {
-            printl("Cannot find %s" NEWLINE, cfg.payload);
-            goto none;
-        }
-        payload_path = cfg.payload;
+        if (payload_len)
+            payload_path = cfg.payload;
     }
     /* Linux uses all the chunks but the last one */
     min_chunks = (cfg.min + CHUNK - 1) / CHUNK + 1;
@@ -448,6 +446,10 @@ void rootimg(char *arg) {
         state = IMAGE_NONE;
     }
 
+    if (state == IMAGE_NONE && cfg.payload[0] && !payload_path) {
+        printl("Cannot find %s, needed to create the Linux image" NEWLINE, cfg.payload);
+        goto none;
+    }
     if (state == IMAGE_NONE) {
         printl("Creating the Linux image %s (%s)" NEWLINE, cfg.image,
                cfg.max ? "as large as possible" : "configured size");

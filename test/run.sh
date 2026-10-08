@@ -38,3 +38,6 @@ echo "== 14: a new image with a payload";   cfg max 1M $T/payload.tns; run 20000
 rm $T/rootfs.img.tns
 echo "== 15: an unused image without it";    cfg 4M; run 100000000; cfg 4M 1M $T/payload.tns; run 100000000; payload $T/rootfs.img.tns | cmp - $T/payload.tns && echo "payload OK"
 echo "== 16: the same again: left alone";    run 100000000
+echo "== 17: the payload deleted afterwards"; rm $T/payload.tns; run 100000000
+rm $T/rootfs.img.tns
+echo "== 18: no payload for a new image";    run 100000000; ls $T
