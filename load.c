@@ -20,7 +20,6 @@
 #include <libfdt.h>
 
 #include "common.h"
-#include "initrd.h"
 #include "memory.h"
 
 static size_t file_size(const char *filename) {
@@ -31,6 +30,7 @@ static size_t file_size(const char *filename) {
 
 void load_kernel(const char *filename) {
     size_t kernel_size = file_size(filename);
+    size_t size_free_memory = mem_block_size_free() - settings.kernel.size;
     FILE *f;
 
     if (!kernel_size) {
@@ -38,14 +38,10 @@ void load_kernel(const char *filename) {
         return;
     }
 
-    if (settings.initrd_loaded && initrd_in_kernel_block()) {
-        printl("Load the kernel before the initrd" NEWLINE);
-        return;
-    }
-    if (mem_block_fit(kernel_size)) {
+    if (kernel_size > size_free_memory) {
         printl( "Kernel too large!" NEWLINE
                 "Tried to load kernel of %u bytes into %u bytes of free space" NEWLINE,
-                kernel_size, settings.mem_block.size);
+                kernel_size, size_free_memory);
         return;
     }
 
@@ -68,14 +64,58 @@ void load_kernel(const char *filename) {
 }
 
 void load_initrd(const char *filename) {
+    FILE *f;
+    size_t initrd_size = file_size(filename);
+    size_t size_free_memory = mem_block_size_free() - settings.initrd.size;
+    void *initrd_laddr = ((char*)settings.mem_block.start + settings.mem_block.size - initrd_size);
+    initrd_laddr = ROUND_PAGE_BOUND(initrd_laddr);
+    size_t needed_size = ((char*)settings.mem_block.start + settings.mem_block.size)
+                        - (char*)initrd_laddr;
+
     if (!strlen(filename) && settings.initrd_loaded) {
-        initrd_free();
+        settings.initrd_loaded = 0;
+        settings.initrd.addr = NULL;
+        settings.initrd.size = 0;
         settings.initrd_failed = 0;
         printl("Unloaded initrd" NEWLINE);
         return;
     }
+
     /* Do not boot without the initrd the script asked for */
-    settings.initrd_failed = !!initrd_load(filename);
+    settings.initrd_failed = 1;
+
+    if (!initrd_size) {
+        printl("Initrd doesn't exist or empty" NEWLINE);
+        return;
+    }
+
+    if (needed_size > size_free_memory) {
+        printl( "Initrd too large!" NEWLINE
+                "Tried to load initrd needing %u bytes into %u bytes of free space" NEWLINE
+                "Original initrd size was %u bytes" NEWLINE,
+                needed_size, size_free_memory, initrd_size);
+        return;
+    }
+
+    f = fopen(filename, "rb");
+    if (!f) {
+        printl("Failed to open initrd image %s" NEWLINE, filename);
+        return;
+    }
+
+    settings.initrd.addr = initrd_laddr;
+    settings.initrd.size = needed_size;
+
+    if (fread(settings.initrd.addr, 1, initrd_size, f) != initrd_size)
+        printl("Warning: read less data from file than expected" NEWLINE);
+
+    fclose(f);
+
+    settings.initrd_loaded = !!(settings.initrd.size);
+    settings.initrd_failed = 0;
+
+    printl("Initrd successfully loaded" NEWLINE);
+    return;
 }
 
 void load_dtb(const char *filename) {

@@ -22,7 +22,6 @@
 #include "common.h"
 #include "atag.h"
 #include "fdt.h"
-#include "initrd.h"
 
 /* Where to relocate boot parameters? Defined as start of memory + 0x100 */
 #define BOOT_PARAM_RELADDR ((char*)(settings.phys.start) + 0x100)
@@ -46,10 +45,8 @@ void kernel_boot(char *ignored UNUSED) {
         printl("Not booting: the initrd could not be loaded" NEWLINE);
         return;
     }
-    if (initrd_place())
-        return;
 
-    /* Kernels should already be loaded to their correct places */
+    /* Kernels and initrds should already be loaded to their correct places */
     /* Build atag next */
     if (!settings.dtb_loaded) {
        if (atag_build()) return;
@@ -58,12 +55,6 @@ void kernel_boot(char *ignored UNUSED) {
     else {
         if(update_fdt()) return;
     }
-
-    /* Nothing of the OS runs from now on */
-    asm volatile("mrs r0, cpsr \n"
-                 "orr r0, r0, #0xc0 \n"
-                 "msr cpsr_c, r0 \n"
-                 : : : "r0");
 
     /* Enable bus access to all peripherals before booting */
     *(io32_t)0x900B0018 = 0;
@@ -77,12 +68,6 @@ void kernel_boot(char *ignored UNUSED) {
                  "bic r0, r0, #0x5 \n"
                  "mcr p15, 0, r0, c1, c0, 0 \n"
                  : : : "r0" );
-
-    /*
-     * The initrd to its place, with the MMU off: the OS's page tables may
-     * be where it goes
-     */
-    initrd_gather();
     /* Bye bye */
     if (settings.break_on_entry) {
         asm volatile("bkpt #0");
