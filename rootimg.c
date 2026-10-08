@@ -26,6 +26,7 @@
  *   size    = max       # or a size such as 64M, 512K; default: max
  *   reserve = 2M        # left free for the TI-Nspire OS with "max"
  *   min     = 6M        # what the root filesystem needs; default: 1M
+ *   payload = /documents/linux/openwrt.tar.gz.tns   # optional
  *
  * The image is created tagged: every 4 KiB chunk starts with
  * "NSPLXIMG" + le32 index + le32 0, the last one with
@@ -37,6 +38,11 @@
  * An image is never smaller than "min": a smaller configured size is
  * raised to it, and without the space for it there is no image, and Linux
  * runs from RAM.
+ *
+ * A payload (a root filesystem archive too large to go through the RAM as
+ * an initrd) is written into a new image, for Linux to unpack on its first
+ * boot: after the tag of chunk 0, "NSPLXPAY" + le32 length + le32 0, then
+ * the payload in the 4080 bytes after the tag of chunks 1, 2...
  */
 
 #include <os.h>
@@ -53,6 +59,9 @@
 #define MIN_CHUNKS	256		/* 1 MiB */
 #define TAG_MAGIC	"NSPLXIMG"
 #define END_MAGIC	"NSPLXEND"
+#define PAYLOAD_MAGIC	"NSPLXPAY"
+#define TAG_SIZE	16
+#define PAYLOAD_PER_CHUNK (CHUNK - TAG_SIZE)
 
 struct rootimg_config {
     char image[128];
@@ -60,7 +69,13 @@ struct rootimg_config {
     unsigned long size;         /* bytes, when !max */
     unsigned long reserve;      /* bytes kept free with max */
     unsigned long min;          /* bytes the root filesystem needs */
+    char payload[128];          /* written into a new image, or "" */
 };
+
+/* The payload: its file, and while create_image() writes it, the stream */
+static const char *payload_path;
+static FILE *payload_f;
+static unsigned long payload_len;
 
 static char rootimg_path[128];
 
@@ -111,6 +126,7 @@ static int read_config(const char *path, struct rootimg_config *cfg) {
     cfg->size = 0;
     cfg->reserve = 2UL << 20;
     cfg->min = (unsigned long)MIN_CHUNKS * CHUNK;
+    cfg->payload[0] = '\0';
 
     if (!f) {
         printl("Cannot open %s" NEWLINE, path);
@@ -141,6 +157,9 @@ static int read_config(const char *path, struct rootimg_config *cfg) {
         } else if (!strcmp(key, "reserve")) {
             if (parse_size(val, &cfg->reserve))
                 printl("%s: bad reserve \"%s\"" NEWLINE, path, val);
+        } else if (!strcmp(key, "payload")) {
+            strncpy(cfg->payload, val, sizeof(cfg->payload) - 1);
+            cfg->payload[sizeof(cfg->payload) - 1] = '\0';
         } else if (!strcmp(key, "min")) {
             if (parse_size(val, &cfg->min))
                 printl("%s: bad min \"%s\"" NEWLINE, path, val);
@@ -182,9 +201,19 @@ static int write_chunks(FILE *f, unsigned from, unsigned to, unsigned total, con
     while (c < to) {
         unsigned n = to - c < CHUNKS_PER_WRITE ? to - c : CHUNKS_PER_WRITE, i;
 
+        if (payload_f)
+            memset(buf, 0, sizeof(buf));
         for (i = 0; i < n; i++) {
             unsigned char *tag = buf + i * CHUNK;
 
+            if (payload_f && c + i == 0) {
+                memcpy(tag + TAG_SIZE, PAYLOAD_MAGIC, 8);
+                put_le32(tag + TAG_SIZE + 8, payload_len);
+            } else if (payload_f && c + i < total - 1 &&
+                       fread(tag + TAG_SIZE, 1, PAYLOAD_PER_CHUNK, payload_f) == 0 &&
+                       ferror(payload_f)) {
+                return -1;
+            }
             if (c + i == total - 1) {
                 memcpy(tag, END_MAGIC, 8);
                 put_le32(tag + 8, total);
@@ -206,22 +235,65 @@ static int write_chunks(FILE *f, unsigned from, unsigned to, unsigned total, con
     return 0;
 }
 
+static unsigned long file_bytes(const char *path) {
+    struct stat st;
+
+    return stat(path, &st) ? 0 : st.st_size;
+}
+
+/* Chunks holding the payload, with chunk 0 and the end chunk */
+static unsigned payload_chunks(void) {
+    return 2 + (payload_len + PAYLOAD_PER_CHUNK - 1) / PAYLOAD_PER_CHUNK;
+}
+
 /* Create an image of `chunks` chunks; -1 when the space runs out */
 static int create_image(const char *path, unsigned chunks) {
-    FILE *f = fopen(path, "wb");
+    FILE *f;
     int ret;
 
+    if (payload_path) {
+        if (chunks < payload_chunks()) {
+            printl("An image of %u KiB cannot hold %s" NEWLINE, chunks * 4, payload_path);
+            return -1;
+        }
+        payload_f = fopen(payload_path, "rb");
+        if (!payload_f) {
+            printl("Cannot open %s" NEWLINE, payload_path);
+            return -1;
+        }
+    }
+    f = fopen(path, "wb");
     if (!f) {
         printl("Cannot create %s" NEWLINE, path);
-        return -1;
-    }
-    ret = write_chunks(f, 0, chunks, chunks, "Creating");
-    if (fclose(f))
         ret = -1;
-    nio_printf(NEWLINE);
-    if (ret)
-        remove(path);
+    } else {
+        ret = write_chunks(f, 0, chunks, chunks, "Creating");
+        if (fclose(f))
+            ret = -1;
+        nio_printf(NEWLINE);
+        if (ret)
+            remove(path);
+    }
+    if (payload_f) {
+        fclose(payload_f);
+        payload_f = NULL;
+    }
     return ret;
+}
+
+/* Does the (fresh) image hold the configured payload? */
+static int has_payload(const char *path) {
+    unsigned char hdr[TAG_SIZE + 16];
+    FILE *f = fopen(path, "rb");
+    int ok;
+
+    if (!f)
+        return 0;
+    ok = fread(hdr, sizeof(hdr), 1, f) == 1 &&
+         !memcmp(hdr + TAG_SIZE, PAYLOAD_MAGIC, 8) &&
+         get_le32(hdr + TAG_SIZE + 8) == payload_len;
+    fclose(f);
+    return ok;
 }
 
 /*
@@ -342,6 +414,15 @@ void rootimg(char *arg) {
     }
     if (read_config(cfgpath, &cfg))
         return;
+    payload_path = NULL;
+    if (cfg.payload[0]) {
+        payload_len = file_bytes(cfg.payload);
+        if (!payload_len) {
+            printl("Cannot find %s" NEWLINE, cfg.payload);
+            goto none;
+        }
+        payload_path = cfg.payload;
+    }
     /* Linux uses all the chunks but the last one */
     min_chunks = (cfg.min + CHUNK - 1) / CHUNK + 1;
     if (min_chunks < MIN_CHUNKS)
@@ -354,6 +435,12 @@ void rootimg(char *arg) {
         want = min_chunks;
 
     state = image_state(cfg.image, &chunks);
+    if (state == IMAGE_FRESH && payload_path && !has_payload(cfg.image)) {
+        printl("%s is unused but does not hold %s, recreating it" NEWLINE,
+               cfg.image, payload_path);
+        remove(cfg.image);
+        state = IMAGE_NONE;
+    }
     if (state == IMAGE_INVALID) {
         printl("%s is not a Linux image (an interrupted creation?), recreating it" NEWLINE,
                cfg.image);

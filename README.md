@@ -61,6 +61,7 @@ filesystem as a block device. ```rootimg``` creates that file the first time:
     size = max      # or a size such as 64M (max: all the free space ...)
     reserve = 2M    # ... minus this much, left to the OS
     min = 6M        # what the root filesystem needs (default 1M)
+    payload = /documents/linux/openwrt.tar.gz.tns   # optional, see below
 
 With ```size = max```, or when there is not enough space for the size asked
 for, the image takes all the free space but ```reserve```. It is never
@@ -73,6 +74,14 @@ lets the kernel check that it found the file's blocks in the right order
 before it writes to them. A new image that is still unused is grown when
 the configured size gets larger; an image Linux has used is left alone
 (delete it from the TI-Nspire file browser to start over).
+
+A root filesystem too large to be loaded into the RAM as an initrd (the
+OS gives about 4 MB on a Touchpad, kernel included) can come as a
+```payload```: a new image is created with that file in it, which Linux
+unpacks on its first boot. The payload goes after the tag of each chunk:
+chunk 0 holds ```NSPLXPAY```, its length (le32) and a zero le32 after its
+tag, and chunks 1, 2... hold the payload in their 4080 bytes after the
+tag. An unused image without the configured payload is recreated.
 
 The host test in ```test/``` runs ```rootimg.c``` against a simulated file
 system with limited free space: ```test/build.sh && cd test && ./run.sh```.
