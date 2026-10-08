@@ -60,9 +60,13 @@ filesystem as a block device. ```rootimg``` creates that file the first time:
     image = /documents/linux/rootfs.img.tns
     size = max      # or a size such as 64M (max: all the free space ...)
     reserve = 2M    # ... minus this much, left to the OS
+    min = 6M        # what the root filesystem needs (default 1M)
 
 With ```size = max```, or when there is not enough space for the size asked
-for, the image takes all the free space but ```reserve```. A progress bar is
+for, the image takes all the free space but ```reserve```. It is never
+smaller than ```min```: a smaller size is raised to it, a new image too
+small for it is grown, and without the space for it there is no image
+(Linux then runs from RAM). A progress bar is
 shown while the file is written. Every 4 KiB chunk of a new image carries a
 tag (```NSPLXIMG``` and its index, ```NSPLXEND``` for the last one), which
 lets the kernel check that it found the file's blocks in the right order

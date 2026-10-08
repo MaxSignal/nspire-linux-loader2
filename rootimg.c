@@ -25,6 +25,7 @@
  *   image   = /documents/linux/rootfs.img.tns
  *   size    = max       # or a size such as 64M, 512K; default: max
  *   reserve = 2M        # left free for the TI-Nspire OS with "max"
+ *   min     = 6M        # what the root filesystem needs; default: 1M
  *
  * The image is created tagged: every 4 KiB chunk starts with
  * "NSPLXIMG" + le32 index + le32 0, the last one with
@@ -32,6 +33,10 @@
  * to make sure it found the file's blocks, and Linux formats the image on
  * its first boot. Only an image Linux has not used yet is grown; to resize
  * a used one, delete it from the TI-Nspire file browser.
+ *
+ * An image is never smaller than "min": a smaller configured size is
+ * raised to it, and without the space for it there is no image, and Linux
+ * runs from RAM.
  */
 
 #include <os.h>
@@ -54,6 +59,7 @@ struct rootimg_config {
     int max;                    /* as large as the free space allows */
     unsigned long size;         /* bytes, when !max */
     unsigned long reserve;      /* bytes kept free with max */
+    unsigned long min;          /* bytes the root filesystem needs */
 };
 
 static char rootimg_path[128];
@@ -104,6 +110,7 @@ static int read_config(const char *path, struct rootimg_config *cfg) {
     cfg->max = 1;
     cfg->size = 0;
     cfg->reserve = 2UL << 20;
+    cfg->min = (unsigned long)MIN_CHUNKS * CHUNK;
 
     if (!f) {
         printl("Cannot open %s" NEWLINE, path);
@@ -134,6 +141,9 @@ static int read_config(const char *path, struct rootimg_config *cfg) {
         } else if (!strcmp(key, "reserve")) {
             if (parse_size(val, &cfg->reserve))
                 printl("%s: bad reserve \"%s\"" NEWLINE, path, val);
+        } else if (!strcmp(key, "min")) {
+            if (parse_size(val, &cfg->min))
+                printl("%s: bad min \"%s\"" NEWLINE, path, val);
         } else {
             printl("%s: unknown setting \"%s\"" NEWLINE, path, key);
         }
@@ -291,7 +301,7 @@ static int grow_image(const char *path, unsigned from, unsigned to) {
     return ret;
 }
 
-static int make_max(const char *path, unsigned long reserve) {
+static int make_max(const char *path, unsigned long reserve, unsigned min_chunks) {
     char dir[128];
     char *slash;
     unsigned long free_bytes;
@@ -304,14 +314,15 @@ static int make_max(const char *path, unsigned long reserve) {
         *slash = '\0';
 
     free_bytes = probe_free_space(dir);
-    if (free_bytes <= reserve + (unsigned long)MIN_CHUNKS * CHUNK) {
-        printl("Not enough free space for a Linux image (%lu KiB free, %lu KiB kept)" NEWLINE,
-               free_bytes >> 10, reserve >> 10);
+    /* a little slack for the file's own filesystem metadata */
+    chunks = free_bytes > reserve ? (free_bytes - reserve) / CHUNK : 0;
+    chunks -= chunks ? chunks / 64 + 1 : 0;
+    if (chunks < min_chunks) {
+        printl("Not enough free space for the Linux image: %lu KiB free,"
+               " %u KiB needed, %lu KiB kept for the TI-Nspire OS" NEWLINE,
+               free_bytes >> 10, (min_chunks - 1) * 4, reserve >> 10);
         return -1;
     }
-    /* a little slack for the file's own filesystem metadata */
-    chunks = (free_bytes - reserve) / CHUNK;
-    chunks -= chunks / 64 + 1;
     if (create_image(path, chunks)) {
         printl("Creating the image failed" NEWLINE);
         return -1;
@@ -321,7 +332,7 @@ static int make_max(const char *path, unsigned long reserve) {
 
 void rootimg(char *arg) {
     struct rootimg_config cfg;
-    unsigned chunks = 0, want;
+    unsigned chunks = 0, want, min_chunks;
     enum image_state state;
     char *cfgpath = trim(arg);
 
@@ -331,11 +342,16 @@ void rootimg(char *arg) {
     }
     if (read_config(cfgpath, &cfg))
         return;
+    /* Linux uses all the chunks but the last one */
+    min_chunks = (cfg.min + CHUNK - 1) / CHUNK + 1;
+    if (min_chunks < MIN_CHUNKS)
+        min_chunks = MIN_CHUNKS;
     want = cfg.max ? 0 : cfg.size / CHUNK;
-    if (!cfg.max && want < MIN_CHUNKS) {
-        printl("Image size too small, using 1 MiB" NEWLINE);
-        want = MIN_CHUNKS;
-    }
+    if (!cfg.max && cfg.size < cfg.min)
+        printl("The configured size is less than the %lu KiB Linux needs, using that" NEWLINE,
+               cfg.min >> 10);
+    if (!cfg.max && want < min_chunks)
+        want = min_chunks;
 
     state = image_state(cfg.image, &chunks);
     if (state == IMAGE_INVALID) {
@@ -350,19 +366,35 @@ void rootimg(char *arg) {
                cfg.max ? "as large as possible" : "configured size");
         if (cfg.max || create_image(cfg.image, want)) {
             if (!cfg.max)
-                printl("Not enough space for %lu KiB, using the free space instead" NEWLINE,
-                       cfg.size >> 10);
-            if (make_max(cfg.image, cfg.reserve))
-                return;
+                printl("Not enough space for %u KiB, using the free space instead" NEWLINE,
+                       (want - 1) * 4);
+            if (make_max(cfg.image, cfg.reserve, min_chunks))
+                goto none;
+        }
+    } else if (cfg.max && chunks < min_chunks) {
+        /* An image made for a smaller root filesystem */
+        if (state == IMAGE_FRESH) {
+            printl("Growing %s to the %u KiB Linux needs" NEWLINE, cfg.image,
+                   (min_chunks - 1) * 4);
+            if (grow_image(cfg.image, chunks, min_chunks)) {
+                printl("Not enough space, recreating it as large as possible" NEWLINE);
+                remove(cfg.image);
+                if (make_max(cfg.image, cfg.reserve, min_chunks))
+                    goto none;
+            }
+        } else {
+            printl("%s is too small for this system (%u KiB, %u KiB needed); delete it"
+                   " from the TI-Nspire file browser and boot again" NEWLINE,
+                   cfg.image, (chunks - 1) * 4, (min_chunks - 1) * 4);
         }
     } else if (!cfg.max && want > chunks) {
         if (state == IMAGE_FRESH) {
-            printl("Growing %s to %lu KiB" NEWLINE, cfg.image, cfg.size >> 10);
+            printl("Growing %s to %u KiB" NEWLINE, cfg.image, (want - 1) * 4);
             if (grow_image(cfg.image, chunks, want)) {
                 printl("Not enough space, recreating it as large as possible" NEWLINE);
                 remove(cfg.image);
-                if (make_max(cfg.image, cfg.reserve))
-                    return;
+                if (make_max(cfg.image, cfg.reserve, min_chunks))
+                    goto none;
             }
         } else {
             printl("%s is in use with %u KiB; to resize it, delete it from the"
@@ -371,12 +403,14 @@ void rootimg(char *arg) {
     }
 
     state = image_state(cfg.image, &chunks);
-    if (state != IMAGE_FRESH && state != IMAGE_USED) {
-        printl("No usable Linux image" NEWLINE);
-        return;
-    }
+    if (state != IMAGE_FRESH && state != IMAGE_USED)
+        goto none;
     strncpy(rootimg_path, cfg.image, sizeof(rootimg_path) - 1);
     rootimg_path[sizeof(rootimg_path) - 1] = '\0';
     printl("Linux image: %s, %u KiB%s" NEWLINE, cfg.image, (chunks - 1) * 4,
            state == IMAGE_FRESH ? " (formatted on first boot)" : "");
+    return;
+
+none:
+    printl("No Linux image: Linux runs from RAM, and forgets what it writes" NEWLINE);
 }
