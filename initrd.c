@@ -57,15 +57,16 @@ static void *alloc_piece(size_t want, size_t *got) {
     size_t size = want;
     void *p;
 
-    while (size >= MIN_PIECE) {
+    for (;;) {
         p = malloc(size);
         if (p) {
             *got = size;
             return p;
         }
+        if (size <= MIN_PIECE)
+            return NULL;
         size = (size / 2 + MIN_PIECE - 1) & ~(MIN_PIECE - 1);
     }
-    return NULL;
 }
 
 int initrd_load(const char *filename) {
