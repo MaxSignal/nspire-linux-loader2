@@ -76,6 +76,7 @@ struct params {
     unsigned ramdisk_size;
 
     unsigned initrd_loaded:1;
+    unsigned initrd_failed:1;
     unsigned kernel_loaded:1;
     unsigned dtb_loaded:1;
     unsigned break_on_entry:1;

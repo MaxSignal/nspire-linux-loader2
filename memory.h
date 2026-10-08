@@ -24,10 +24,12 @@
 
 #define MAX_BOOT_PARAM_SIZE (0x4000-0x100)
 
-#define mem_block_size_free() (settings.mem_block.size - settings.kernel.size - settings.initrd.size)
+#define mem_block_size_free() (settings.mem_block.size - settings.kernel.size)
 
 
 void alloc_memory();
+int mem_block_fit(size_t size);
+void mem_block_shrink(size_t size);
 void free_memory();
 void show_mem(char*);
 

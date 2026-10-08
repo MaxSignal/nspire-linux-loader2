@@ -22,7 +22,7 @@ Copy ```linuxloader.tns``` to your calculator and run it.
 Valid commands are:
 
  * ```kernel <filename>```: Loads a kernel image into memory
- * ```initrd <filename>```: Loads a ramdisk into memory
+ * ```initrd <filename>```: Loads a ramdisk into memory. It may be larger than any block of memory the OS gives: it is loaded in pieces, and gathered at boot into the highest free part of the RAM, above where the kernel decompresses itself. ```boot``` refuses to go on when the initrd could not be loaded.
  * ```dtb <filename>```: Loads a DTB image into memory
  * ```script <filename>```: Loads a script file
  * ```dump```: Prints out the current internal state of the bootloader. Useful for debugging.

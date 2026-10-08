@@ -18,6 +18,7 @@
 
 #include <os.h>
 #include "common.h"
+#include "initrd.h"
 #include "memory.h"
 
 /* Amount of memory to try extending each time in max_malloc */
@@ -71,16 +72,15 @@ void show_mem(char *ignored UNUSED) {
         HUMAN(settings.mem_block.size);
         printl("" NEWLINE);
 
-        printl("Initrd: ");
+        printl("Initrd:  ");
         HUMAN(settings.initrd.size);
-        printl("/");
-        HUMAN(settings.mem_block.size);
-        printl("" NEWLINE);
+        printl(" (in blocks of its own)" NEWLINE);
 }
 
 #undef HUMAN
 
 void free_memory() {
+    initrd_free();
     free(settings.boot_param.start);
     free(settings.mem_block.start);
 
@@ -98,6 +98,29 @@ void free_memory() {
 
     settings.kernel_loaded = 0;
     settings.initrd_loaded = 0;
+}
+
+/* Make sure the kernel's block can hold size bytes */
+int mem_block_fit(size_t size) {
+    if (size <= settings.mem_block.size)
+        return 0;
+    free(settings.mem_block.start);
+    settings.kernel.size = 0;
+    settings.kernel.addr = NULL;
+    settings.kernel_loaded = 0;
+    settings.mem_block.start = max_malloc(&settings.mem_block.size);
+    return size <= settings.mem_block.size ? 0 : -1;
+}
+
+/* Give back what the kernel does not use */
+void mem_block_shrink(size_t size) {
+    void *p = realloc(settings.mem_block.start, size);
+
+    if (!p)
+        return;
+    settings.mem_block.start = p;
+    settings.mem_block.size = size;
+    settings.kernel.addr = p;
 }
 
 void alloc_memory() {
