@@ -108,6 +108,12 @@ void load_initrd(const char *filename) {
 
     if (fread(settings.initrd.addr, 1, initrd_size, f) != initrd_size)
         printl("Warning: read less data from file than expected" NEWLINE);
+    /*
+     * The kernel is given the whole page-aligned area: what follows the
+     * file in it must be zeros, which it skips, not whatever the memory
+     * held (it takes that for another archive, and fails)
+     */
+    memset((char*)settings.initrd.addr + initrd_size, 0, needed_size - initrd_size);
 
     fclose(f);
 
